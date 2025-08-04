@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Auto-Grouper for NotebookLM</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- PDF.js for text extraction -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
+    <!-- pdf-lib.js for merging PDFs -->
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+    <!-- JSZip for creating zip files -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script>
+        // Set the workerSrc for pdf.js. This is required.
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js`;
+    </script>
+    <style>
+        body { font-family: 'Inter', sans-serif; scroll-behavior: smooth; }
+        .progress-bar-container {
+            width: 100%;
+            background-color: #374151; /* gray-700 */
+            border-radius: 9999px;
+            overflow: hidden;
+        }
+        .progress-bar {
+            height: 20px;
+            width: 0%;
+            background-color: #4f46e5; /* indigo-600 */
+            border-radius: 9999px;
+            transition: width 0.4s ease;
+            text-align: center;
+            color: white;
+            font-size: 12px;
+            line-height: 20px;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-300 flex items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-4xl mx-auto bg-slate-800 rounded-2xl shadow-lg p-6 md:p-8 border border-slate-700">
+        
+        <!-- Header -->
+        <div class="text-center mb-8">
+            <h1 class="text-3xl md:text-4xl font-bold text-slate-100">PDF Auto-Grouper</h1>
+            <p class="text-slate-400 mt-2">Automatically group PDFs by word count and file size for NotebookLM.</p>
+        </div>
+
+        <!-- File Upload Section -->
+        <div class="bg-slate-900 border-2 border-dashed border-slate-600 rounded-xl p-6 text-center">
+            <input type="file" id="fileInput" multiple accept=".pdf" class="hidden">
+            <label for="fileInput" class="cursor-pointer inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all">
+                <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                Choose All PDF Files
+            </label>
+             <p id="file-count-info" class="mt-4 text-sm text-slate-500">No files selected</p>
+        </div>
+
+        <!-- Action Button -->
+        <div class="mt-6 text-center">
+            <button id="startButton" class="w-full md:w-auto bg-green-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-green-700 transition-transform transform hover:scale-105 disabled:bg-slate-600 disabled:cursor-not-allowed disabled:transform-none" disabled>
+                Analyze & Group Files
+            </button>
+        </div>
+
+        <!-- Results Section -->
+        <div id="results" class="mt-8 hidden">
+            <!-- Progress Bar Loader -->
+            <div id="loader" class="text-center hidden my-4 space-y-2">
+                <div class="progress-bar-container">
+                    <div id="progress-bar" class="progress-bar"></div>
+                </div>
+                <p id="progress-text" class="text-slate-400 text-sm">Processing files...</p>
+            </div>
+            
+            <div id="groups-container"></div>
+
+            <div id="leftovers-container" class="hidden mt-8">
+                <h3 class="text-xl font-bold text-slate-100 mb-3">Leftover Files</h3>
+                <p class="text-sm text-slate-400 mb-3">These files could not be placed into a valid group.</p>
+                <div class="bg-slate-700/50 p-4 rounded-lg">
+                    <ul id="leftovers-list" class="text-sm text-slate-300 list-disc list-inside"></ul>
+                    <div class="mt-4 text-right">
+                        <button id="downloadLeftoversButton" class="bg-yellow-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-yellow-700 text-sm">
+                            Download All Leftovers (Merged)
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="download-all-section" class="mt-8 text-center hidden">
+                <button id="downloadAllButton" class="w-full md:w-auto bg-red-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-red-700 transition-transform transform hover:scale-105">
+                    Download All Groups (.zip)
+                </button>
+                <p id="zip-loader" class="text-slate-400 mt-2 hidden">Creating ZIP file, please wait...</p>
+                <div id="reanalyze-section" class="mt-4 hidden">
+                    <p id="reanalyze-error-text" class="text-red-500 text-sm"></p>
+                    <button id="reanalyzeButton" class="mt-2 w-full md:w-auto bg-orange-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-orange-700 text-sm">
+                        Remove Corrupt File & Re-Analyze
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    window.addEventListener('DOMContentLoaded', () => {
+        const elements = {
+            fileInput: document.getElementById('fileInput'),
+            startButton: document.getElementById('startButton'),
+            fileCountInfo: document.getElementById('file-count-info'),
+            resultsDiv: document.getElementById('results'),
+            loader: document.getElementById('loader'),
+            progressBar: document.getElementById('progress-bar'),
+            progressText: document.getElementById('progress-text'),
+            groupsContainer: document.getElementById('groups-container'),
+            leftoversContainer: document.getElementById('leftovers-container'),
+            leftoversList: document.getElementById('leftovers-list'),
+            downloadLeftoversButton: document.getElementById('downloadLeftoversButton'),
+            downloadAllSection: document.getElementById('download-all-section'),
+            downloadAllButton: document.getElementById('downloadAllButton'),
+            zipLoader: document.getElementById('zip-loader'),
+            reanalyzeSection: document.getElementById('reanalyze-section'),
+            reanalyzeErrorText: document.getElementById('reanalyze-error-text'),
+            reanalyzeButton: document.getElementById('reanalyzeButton'),
+        };
+
+        let allFilesData = [];
+        let validGroups = [];
+        let unplacedFilesData = [];
+        let corruptFileName = null;
+
+        const WORD_COUNT_MIN = 390000;
+        const WORD_COUNT_MAX = 470000;
+        const SIZE_MAX_BYTES = 200 * 1024 * 1024; // 200 MB
+
+        // --- Event Listeners ---
+        elements.fileInput.addEventListener('change', handleFileSelection);
+        elements.startButton.addEventListener('click', analyzeAndGroupFiles);
+        elements.downloadAllButton.addEventListener('click', downloadAllAsZip);
+        elements.downloadLeftoversButton.addEventListener('click', downloadLeftovers);
+        elements.reanalyzeButton.addEventListener('click', handleReanalyze);
+
+        function handleFileSelection(event) {
+            const files = Array.from(event.target.files);
+            allFilesData = files.map(file => ({ file }));
+            elements.fileCountInfo.textContent = `${files.length} file(s) selected`;
+            elements.startButton.disabled = files.length === 0;
+            elements.resultsDiv.classList.add('hidden');
+        }
+
+        async function analyzeAndGroupFiles() {
+            if (allFilesData.length === 0) return;
+            setLoadingState(true, 'Analyzing files...');
+
+            for (const [index, fileData] of allFilesData.entries()) {
+                const stats = await processPdf(fileData.file);
+                Object.assign(fileData, stats);
+                const progress = ((index + 1) / allFilesData.length) * 100;
+                updateProgress(progress, `Analyzing: ${truncateFilename(fileData.file.name, 25)}`);
+            }
+            
+            updateProgress(100, 'Grouping files...');
+            
+            allFilesData.sort((a, b) => b.wordCount - a.wordCount);
+
+            const groups = [];
+            let unplaced = [...allFilesData];
+
+            while (unplaced.length > 0) {
+                const currentFile = unplaced.shift();
+                
+                if (currentFile.wordCount > WORD_COUNT_MAX || currentFile.size > SIZE_MAX_BYTES) continue;
+                
+                const newGroup = { files: [currentFile], totalWordCount: currentFile.wordCount, totalSize: currentFile.size };
+
+                for (let i = unplaced.length - 1; i >= 0; i--) {
+                    const otherFile = unplaced[i];
+                    if ((newGroup.totalWordCount + otherFile.wordCount <= WORD_COUNT_MAX) && (newGroup.totalSize + otherFile.size <= SIZE_MAX_BYTES)) {
+                        newGroup.files.push(otherFile);
+                        newGroup.totalWordCount += otherFile.wordCount;
+                        newGroup.totalSize += otherFile.size;
+                        unplaced.splice(i, 1);
+                    }
+                }
+                groups.push(newGroup);
+            }
+
+            validGroups = [];
+            unplacedFilesData = [];
+            groups.forEach(group => {
+                if (group.totalWordCount >= WORD_COUNT_MIN) {
+                    validGroups.push(group);
+                } else {
+                    unplacedFilesData.push(...group.files);
+                }
+            });
+
+            setLoadingState(false);
+            displayGroupResults(validGroups, unplacedFilesData);
+        }
+        
+        function displayGroupResults(groups, leftovers) {
+            elements.groupsContainer.innerHTML = '';
+            
+            if (groups.length === 0 && leftovers.length === 0) {
+                 elements.groupsContainer.innerHTML = `<p class="text-center text-slate-400">No files were analyzed.</p>`;
+            } else if (groups.length === 0) {
+                 elements.groupsContainer.innerHTML = `<p class="text-center text-slate-400">No valid groups could be formed based on the rules.</p>`;
+            } else {
+                groups.forEach((group, index) => {
+                    const groupEl = document.createElement('div');
+                    groupEl.className = 'bg-slate-700/50 p-4 rounded-lg mb-6';
+                    const fileList = group.files.map(f => `<li class="truncate" title="${f.file.name}">${f.file.name}</li>`).join('');
+                    
+                    groupEl.innerHTML = `
+                        <div class="flex justify-between items-center mb-3">
+                            <h3 class="text-xl font-bold text-slate-100">Group ${index + 1}</h3>
+                            <button data-group-index="${index}" class="download-group-btn bg-purple-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-purple-700 text-sm">
+                                Download Group
+                            </button>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm mb-4">
+                            <div class="bg-slate-900/50 p-2 rounded"><span class="text-slate-400 block">Total Words:</span><span class="font-semibold text-lg text-indigo-400">${group.totalWordCount.toLocaleString()}</span></div>
+                            <div class="bg-slate-900/50 p-2 rounded"><span class="text-slate-400 block">Total Size:</span><span class="font-semibold text-lg">${formatBytes(group.totalSize)}</span></div>
+                            <div class="bg-slate-900/50 p-2 rounded"><span class="text-slate-400 block">Files:</span><span class="font-semibold text-lg">${group.files.length}</span></div>
+                        </div>
+                        <div>
+                            <h4 class="text-md font-bold text-slate-300 mb-1">Files in this group:</h4>
+                            <ul class="list-disc list-inside text-slate-400 text-xs">${fileList}</ul>
+                        </div>
+                    `;
+                    elements.groupsContainer.appendChild(groupEl);
+                });
+            }
+
+            if (leftovers.length > 0) {
+                elements.leftoversList.innerHTML = leftovers.map(f => `<li title="${f.file.name}">${truncateFilename(f.file.name, 50)} (${f.wordCount.toLocaleString()} words, ${formatBytes(f.size)})</li>`).join('');
+                elements.leftoversContainer.classList.remove('hidden');
+            } else {
+                elements.leftoversContainer.classList.add('hidden');
+            }
+            
+            if (groups.length > 0 || leftovers.length > 0) {
+                 elements.downloadAllSection.classList.remove('hidden');
+            }
+
+            document.querySelectorAll('.download-group-btn').forEach(button => {
+                button.addEventListener('click', (e) => {
+                    const groupIndex = parseInt(e.target.dataset.groupIndex);
+                    downloadGroup(groupIndex);
+                });
+            });
+        }
+        
+        async function downloadGroup(groupIndex) {
+            const group = validGroups[groupIndex];
+            const button = document.querySelector(`[data-group-index="${groupIndex}"]`);
+            const originalText = button.textContent;
+            button.textContent = 'Merging...';
+            button.disabled = true;
+            
+            try {
+                const mergedBytes = await mergePdfBytes(group.files);
+                downloadFile(mergedBytes, `Group ${groupIndex + 1}.pdf`, 'application/pdf');
+            } catch (error) {
+                console.error('Error merging group:', error);
+                button.textContent = 'Error!';
+                 setTimeout(() => { button.textContent = originalText; }, 3000);
+            } finally {
+                if(button.textContent !== 'Error!') {
+                    button.textContent = originalText;
+                    button.disabled = false;
+                }
+            }
+        }
+
+        async function downloadLeftovers() {
+            if (unplacedFilesData.length === 0) return;
+            const button = elements.downloadLeftoversButton;
+            const originalText = button.textContent;
+            button.textContent = 'Merging...';
+            button.disabled = true;
+
+            try {
+                const mergedBytes = await mergePdfBytes(unplacedFilesData);
+                downloadFile(mergedBytes, 'Leftovers.pdf', 'application/pdf');
+            } catch (error) {
+                console.error('Error merging leftovers:', error);
+                button.textContent = 'Error!';
+                 setTimeout(() => { button.textContent = originalText; }, 3000);
+            } finally {
+                 if(button.textContent !== 'Error!') {
+                    button.textContent = originalText;
+                    button.disabled = false;
+                }
+            }
+        }
+
+        async function downloadAllAsZip() {
+            elements.zipLoader.textContent = 'Creating ZIP file, please wait...';
+            elements.zipLoader.classList.remove('hidden', 'text-red-500');
+            elements.reanalyzeSection.classList.add('hidden');
+            elements.downloadAllButton.disabled = true;
+            
+            try {
+                const zip = new JSZip();
+                
+                for (const [index, group] of validGroups.entries()) {
+                    const mergedBytes = await mergePdfBytes(group.files);
+                    zip.file(`Group ${index + 1}.pdf`, mergedBytes);
+                }
+
+                if (unplacedFilesData.length > 0) {
+                    const leftoversBytes = await mergePdfBytes(unplacedFilesData);
+                    zip.file('Leftovers.pdf', leftoversBytes);
+                }
+
+                const content = await zip.generateAsync({ type: "blob" });
+                downloadFile(content, "PDF_Groups.zip", "application/zip");
+                elements.zipLoader.classList.add('hidden');
+            } catch (error) {
+                console.error('Error creating ZIP file:', error);
+                corruptFileName = error.fileName; // Store the corrupt file name
+                elements.zipLoader.classList.add('hidden');
+                elements.reanalyzeErrorText.textContent = `Error: The file "${truncateFilename(corruptFileName, 40)}" seems to be corrupt or protected.`;
+                elements.reanalyzeSection.classList.remove('hidden');
+            } finally {
+                elements.downloadAllButton.disabled = false;
+            }
+        }
+
+        function handleReanalyze() {
+            if (!corruptFileName) return;
+            // Filter out the corrupt file from the master list
+            allFilesData = allFilesData.filter(data => data.file.name !== corruptFileName);
+            corruptFileName = null; // Reset
+            elements.reanalyzeSection.classList.add('hidden');
+            // Re-run the entire process
+            analyzeAndGroupFiles();
+        }
+
+        async function mergePdfBytes(filesToMerge) {
+            const { PDFDocument } = PDFLib;
+            const mergedPdf = await PDFDocument.create();
+            for (const fileData of filesToMerge) {
+                try {
+                    const pdfBytes = await fileData.file.arrayBuffer();
+                    const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+                    const copiedPages = await mergedPdf.copyPages(pdfDoc, pdfDoc.getPageIndices());
+                    copiedPages.forEach(page => mergedPdf.addPage(page));
+                } catch (error) {
+                    console.error(`Error merging file ${fileData.file.name}:`, error);
+                    const customError = new Error(`Error with a file.`);
+                    customError.fileName = fileData.file.name;
+                    throw customError;
+                }
+            }
+            return await mergedPdf.save();
+        }
+
+        // --- Helpers ---
+        function setLoadingState(isLoading, text = 'Processing...') {
+            if (isLoading) {
+                elements.resultsDiv.classList.remove('hidden');
+                elements.groupsContainer.innerHTML = '';
+                elements.leftoversContainer.classList.add('hidden');
+                elements.downloadAllSection.classList.add('hidden');
+                elements.reanalyzeSection.classList.add('hidden');
+                elements.loader.classList.remove('hidden');
+                elements.progressBar.style.width = '0%';
+                elements.progressBar.textContent = '';
+                elements.progressText.textContent = text;
+                elements.startButton.disabled = true;
+            } else {
+                elements.loader.classList.add('hidden');
+                elements.startButton.disabled = false;
+            }
+        }
+
+        function updateProgress(percentage, text) {
+            elements.progressBar.style.width = `${percentage}%`;
+            elements.progressBar.textContent = `${Math.round(percentage)}%`;
+            elements.progressText.textContent = text;
+        }
+
+        async function processPdf(file) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = async (event) => {
+                    try {
+                        const pdfData = new Uint8Array(event.target.result);
+                        const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+                        let fullText = '';
+                        for (let i = 1; i <= pdf.numPages; i++) {
+                            const page = await pdf.getPage(i);
+                            const textContent = await page.getTextContent();
+                            fullText += textContent.items.map(item => item.str).join(' ') + '\n\n';
+                        }
+                        resolve({
+                            wordCount: fullText.match(/\S+/g)?.length || 0,
+                            size: file.size
+                        });
+                    } catch (error) {
+                        console.error(`Error processing ${file.name}:`, error);
+                        resolve({ wordCount: 0, size: file.size });
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+            });
+        }
+        
+        const formatBytes = (bytes, decimals = 2) => {
+            if (!bytes || bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+        const truncateFilename = (name, len) => name.length > len ? `${name.substring(0, len-20)}...${name.substring(name.length-15)}` : name;
+        const downloadFile = (data, filename, type) => {
+            const blob = new Blob([data], { type: type });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+        };
+    });
+    </script>
+</body>
+</html>
