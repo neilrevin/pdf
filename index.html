@@ -170,33 +170,43 @@
             
             updateProgress(100, 'Grouping files...');
             
+            // New, smarter grouping algorithm
             allFilesData.sort((a, b) => b.wordCount - a.wordCount);
 
-            const groups = [];
-            let unplaced = [...allFilesData];
+            const potentialGroups = [];
+            let unplacedFiles = [...allFilesData.filter(f => f.wordCount <= WORD_COUNT_MAX && f.size <= SIZE_MAX_BYTES)];
 
-            while (unplaced.length > 0) {
-                const currentFile = unplaced.shift();
+            while (unplacedFiles.length > 0) {
+                // Start a new group with the largest remaining file
+                const anchorFile = unplacedFiles.shift();
                 
-                if (currentFile.wordCount > WORD_COUNT_MAX || currentFile.size > SIZE_MAX_BYTES) continue;
-                
-                const newGroup = { files: [currentFile], totalWordCount: currentFile.wordCount, totalSize: currentFile.size };
+                const newGroup = {
+                    files: [anchorFile],
+                    totalWordCount: anchorFile.wordCount,
+                    totalSize: anchorFile.size
+                };
 
-                for (let i = unplaced.length - 1; i >= 0; i--) {
-                    const otherFile = unplaced[i];
-                    if ((newGroup.totalWordCount + otherFile.wordCount <= WORD_COUNT_MAX) && (newGroup.totalSize + otherFile.size <= SIZE_MAX_BYTES)) {
-                        newGroup.files.push(otherFile);
-                        newGroup.totalWordCount += otherFile.wordCount;
-                        newGroup.totalSize += otherFile.size;
-                        unplaced.splice(i, 1);
+                // Greedily fill the group with the smallest available files to get closer to the target
+                for (let i = unplacedFiles.length - 1; i >= 0; i--) {
+                    const smallerFile = unplacedFiles[i];
+                    if ((newGroup.totalWordCount + smallerFile.wordCount <= WORD_COUNT_MAX) && (newGroup.totalSize + smallerFile.size <= SIZE_MAX_BYTES)) {
+                        newGroup.files.push(smallerFile);
+                        newGroup.totalWordCount += smallerFile.wordCount;
+                        newGroup.totalSize += smallerFile.size;
+                        unplacedFiles.splice(i, 1); // This file is now placed
                     }
                 }
-                groups.push(newGroup);
+                potentialGroups.push(newGroup);
             }
 
+            // Filter out groups that don't meet the minimum word count
             validGroups = [];
             unplacedFilesData = [];
-            groups.forEach(group => {
+            
+            // Add files that were too large to begin with to leftovers
+            unplacedFilesData.push(...allFilesData.filter(f => f.wordCount > WORD_COUNT_MAX || f.size > SIZE_MAX_BYTES));
+
+            potentialGroups.forEach(group => {
                 if (group.totalWordCount >= WORD_COUNT_MIN) {
                     validGroups.push(group);
                 } else {
