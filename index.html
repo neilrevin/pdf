@@ -29,7 +29,7 @@
             width: 0%;
             background-color: #4f46e5; /* indigo-600 */
             border-radius: 9999px;
-            transition: width 0.4s ease;
+            transition: width 0.4s ease, background-color 0.4s ease;
             text-align: center;
             color: white;
             font-size: 12px;
@@ -95,7 +95,7 @@
                 </button>
                 <div id="zip-progress-container" class="mt-2 hidden">
                     <div class="progress-bar-container">
-                        <div id="zip-progress-bar" class="progress-bar bg-teal-600"></div>
+                        <div id="zip-progress-bar" class="progress-bar"></div>
                     </div>
                     <p id="zip-progress-text" class="text-slate-400 text-sm mt-1">Starting...</p>
                 </div>
@@ -170,40 +170,31 @@
             
             updateProgress(100, 'Grouping files...');
             
-            // New, smarter grouping algorithm
             allFilesData.sort((a, b) => b.wordCount - a.wordCount);
 
             const potentialGroups = [];
             let unplacedFiles = [...allFilesData.filter(f => f.wordCount <= WORD_COUNT_MAX && f.size <= SIZE_MAX_BYTES)];
 
             while (unplacedFiles.length > 0) {
-                // Start a new group with the largest remaining file
                 const anchorFile = unplacedFiles.shift();
                 
-                const newGroup = {
-                    files: [anchorFile],
-                    totalWordCount: anchorFile.wordCount,
-                    totalSize: anchorFile.size
-                };
+                const newGroup = { files: [anchorFile], totalWordCount: anchorFile.wordCount, totalSize: anchorFile.size };
 
-                // Greedily fill the group with the smallest available files to get closer to the target
                 for (let i = unplacedFiles.length - 1; i >= 0; i--) {
                     const smallerFile = unplacedFiles[i];
                     if ((newGroup.totalWordCount + smallerFile.wordCount <= WORD_COUNT_MAX) && (newGroup.totalSize + smallerFile.size <= SIZE_MAX_BYTES)) {
                         newGroup.files.push(smallerFile);
                         newGroup.totalWordCount += smallerFile.wordCount;
                         newGroup.totalSize += smallerFile.size;
-                        unplacedFiles.splice(i, 1); // This file is now placed
+                        unplacedFiles.splice(i, 1);
                     }
                 }
                 potentialGroups.push(newGroup);
             }
 
-            // Filter out groups that don't meet the minimum word count
             validGroups = [];
             unplacedFilesData = [];
             
-            // Add files that were too large to begin with to leftovers
             unplacedFilesData.push(...allFilesData.filter(f => f.wordCount > WORD_COUNT_MAX || f.size > SIZE_MAX_BYTES));
 
             potentialGroups.forEach(group => {
@@ -325,31 +316,44 @@
                 const totalOperations = validGroups.length + (unplacedFilesData.length > 0 ? 1 : 0);
                 let completedOperations = 0;
 
-                const updateZipProgress = (text) => {
-                    const percentage = totalOperations > 0 ? (completedOperations / totalOperations) * 100 : 100;
+                const updateZipProgress = (text, percentage) => {
                     elements.zipProgressBar.style.width = `${percentage}%`;
                     elements.zipProgressBar.textContent = `${Math.round(percentage)}%`;
                     elements.zipProgressText.textContent = text;
                 };
 
-                updateZipProgress('Preparing to merge...');
+                updateZipProgress('Preparing to merge...', 0);
                 
                 for (const [index, group] of validGroups.entries()) {
-                    updateZipProgress(`Merging Group ${index + 1}...`);
+                    const progressText = `Merging Group ${index + 1}...`;
+                    const progressPercentage = (completedOperations / totalOperations) * 100;
+                    updateZipProgress(progressText, progressPercentage);
+                    
                     const mergedBytes = await mergePdfBytes(group.files);
                     zip.file(`Group ${index + 1}.pdf`, mergedBytes);
                     completedOperations++;
                 }
 
                 if (unplacedFilesData.length > 0) {
-                    updateZipProgress('Merging Leftovers...');
+                    const progressText = 'Merging Leftovers...';
+                    const progressPercentage = (completedOperations / totalOperations) * 100;
+                    updateZipProgress(progressText, progressPercentage);
+
                     const leftoversBytes = await mergePdfBytes(unplacedFilesData);
                     zip.file('Leftovers.pdf', leftoversBytes);
                     completedOperations++;
                 }
 
-                updateZipProgress('Creating ZIP file...');
-                const content = await zip.generateAsync({ type: "blob" });
+                elements.zipProgressBar.classList.remove('bg-indigo-600');
+                elements.zipProgressBar.classList.add('bg-teal-600');
+
+                const content = await zip.generateAsync(
+                    { type: "blob", compression: "DEFLATE" },
+                    (metadata) => {
+                        updateZipProgress(`Compressing... ${Math.round(metadata.percent)}%`, metadata.percent);
+                    }
+                );
+                
                 downloadFile(content, "PDF_Groups.zip", "application/zip");
                 elements.zipProgressContainer.classList.add('hidden');
             } catch (error) {
@@ -360,6 +364,8 @@
                 elements.errorSection.classList.remove('hidden');
             } finally {
                 elements.downloadAllButton.disabled = false;
+                elements.zipProgressBar.classList.remove('bg-teal-600');
+                elements.zipProgressBar.classList.add('bg-indigo-600');
             }
         }
 
